@@ -9,13 +9,16 @@ def record_video(output_path):
         print("Error: Could not access the webcam.")
         return
 
-    # Grab the default width and height of the camera's frames
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = 20.0  # Frames per second
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    
+    
+    if fps == 0.0 or fps == -1:
+        fps = 30.0
+    print(fps)
 
-    # Define the codec and create a VideoWriter object. 
-    # 'mp4v' is great for saving as an .mp4 file.
+    
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
 
