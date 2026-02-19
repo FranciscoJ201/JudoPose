@@ -1,55 +1,69 @@
+import pyrealsense2 as rs
+import numpy as np
 import cv2
+import time
 
-def record_video(output_path):
-    # 0 is usually the default built-in webcam. 
-    # Change to 1 or 2 if you have an external USB camera.
-    cap = cv2.VideoCapture(0)
+# --- CONFIGURATION ---
+OUTPUT_FILENAME = 'realsense_color_only.mp4'
+W, H = 848, 480 
+TARGET_FPS = 90
 
-    if not cap.isOpened():
-        print("Error: Could not access the webcam.")
-        return
+# --- VIDEO WRITER CONFIG ---
+fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
+out = cv2.VideoWriter(OUTPUT_FILENAME, fourcc, TARGET_FPS, (W, H))
 
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
+# --- REALSENSE SETUP ---
+pipeline = rs.pipeline()
+config = rs.config()
+
+# We only enable the color stream here, no depth needed
+config.enable_stream(rs.stream.color, W, H, rs.format.bgr8, TARGET_FPS)
+
+print(f"Starting Realsense stream at {W}x{H}, {TARGET_FPS} FPS...")
+pipeline.start(config)
+
+try:
+    frame_count = 0
+    start_time = time.time()
     
+    print("Recording... Press 'q' to stop.")
     
-    if fps == 0.0 or fps == -1:
-        fps = 30.0
-    print(fps)
-
-    
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
-
-    print(f"Recording... Saving to '{output_path}'.")
-    print("Press 'q' on your keyboard to stop and quit.")
-
     while True:
-        # Read the camera frame
-        ret, frame = cap.read()
+        # Wait for the next set of frames from the camera
+        frames = pipeline.wait_for_frames()
+        color_frame = frames.get_color_frame()
+        
+        if not color_frame:
+            continue
 
-        if not ret:
-            print("Error: Couldn't read the frame. Exiting...")
-            break
-
+        # Convert the Realsense frame to a numpy array for OpenCV
+        color_image = np.asanyarray(color_frame.get_data())
+        
         # Save the frame to our video file
-        out.write(frame)
+        out.write(color_image)
+        
+        # Optional: Add a simple frame counter to the visual display
+        cv2.putText(color_image, f"Recording: {frame_count} frames", 
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        
+        # Show the video stream in a window
+        cv2.imshow("RealSense Color Stream", color_image)
+        
+        frame_count += 1
 
-        # Show the video stream in a window so you can see what's recording
-        cv2.imshow('Webcam Recording', frame)
-
-        # Wait for 1 millisecond and check if the 'q' key was pressed
+        # Check if the 'q' key was pressed to break the loop
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-    # Once 'q' is pressed, clean everything up and close windows
-    cap.release()
-    out.release()
+finally:
+    # Calculate and print the actual recorded FPS at the end
+    elapsed_time = time.time() - start_time
+    actual_fps = frame_count / elapsed_time if elapsed_time > 0 else 0
+    
+    # Clean everything up
+    pipeline.stop()
+    out.release() 
     cv2.destroyAllWindows()
-    print("Video successfully saved!")
-
-if __name__ == "__main__":
-    # Specify your desired file path and name here
-    save_path = "my_recording.mp4" 
-    record_video(save_path)
+    
+    print(f"Finished! Saved {frame_count} frames to '{OUTPUT_FILENAME}'.")
+    print(f"Actual recorded speed: {actual_fps:.2f} FPS")
