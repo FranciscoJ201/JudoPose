@@ -1,3 +1,13 @@
 image_folder
-gopro_raw.mp4
-test.json
+**/*.json
+**/*.jpg
+**/*.mp4
+judo_datasetDONTDELETE
+judo_dataset 
+**/*.pt
+**/*.onnx
+**/*.engine
+**/*.pyc
+runs
+datasets
+.env

@@ -51,4 +51,4 @@ if __name__ == "__main__":
     
     # split_video_for_calibration("gopro1_checkerboard.mp4", "frames_gopro1", frame_skip=30)
     # split_video_for_calibration("realsense_checkerboard.mp4", "frames_realsense", frame_skip=15)
-    split_video_for_calibration('testvideo.mp4','image_folder',frame_skip=1)
+    split_video_for_calibration('gopro_raw.mp4','image_folder',frame_skip=10)

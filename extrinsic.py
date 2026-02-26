@@ -136,6 +136,6 @@ if __name__ == "__main__":
     # Get one frame from your synchronized video
     # You run this separately for EVERY camera in your setup
     
-    # calibrate_extrinsics_pnp("realsense_frame_001.jpg", "intrinsic_realsense.json", "extrinsic_realsense.json", mat_size_meters=8.0)
+    calibrate_extrinsics_pnp("Screenshot 2026-02-09 at 1.00.58 PM.png", "test.json", "extrinsic_realsense.json", mat_size_meters=1.0)
     # calibrate_extrinsics_pnp("gopro1_frame_001.jpg", "intrinsic_gopro1.json", "extrinsic_gopro1.json", mat_size_meters=8.0)
     pass

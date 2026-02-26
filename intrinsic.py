@@ -17,8 +17,8 @@ def calibrate_camera_charuco(image_folder, output_file, is_fisheye=False):
     # MAKE SURE THESE MATCH YOUR PRINTED BOARD EXACTLY
     SQUARES_X = 11
     SQUARES_Y = 8
-    SQUARE_LENGTH = 0.030  # 30mm in meters
-    MARKER_LENGTH = 0.023  # 23mm in meters
+    SQUARE_LENGTH = 0.01  # 30mm in meters
+    MARKER_LENGTH = 0.0075 # 23mm in meters
     
     dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     board = cv2.aruco.CharucoBoard((SQUARES_X, SQUARES_Y), SQUARE_LENGTH, MARKER_LENGTH, dictionary)
