@@ -60,10 +60,11 @@ def calibrate_extrinsics_pnp(image_path, intrinsic_json, output_json, mat_size_m
 
     print("Undistorting image for precise clicking...")
     if camera_model == "fisheye":
-        # Calculate optimal camera matrix for flat viewing
+        # Calculate optimal camera matrix for flat viewing (Legacy GoPro math)
         new_K = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(K, D, (w, h), np.eye(3), balance=0.5)
         undistorted_img = cv2.fisheye.undistortImage(img, K, D, Knew=new_K)
     else:
+        # Both "standard" (RealSense) and "fisheye_rational" (New GoPro math) use standard undistort
         new_K, roi = cv2.getOptimalNewCameraMatrix(K, D, (w,h), 1, (w,h))
         undistorted_img = cv2.undistort(img, K, D, None, new_K)
 
@@ -136,6 +137,6 @@ if __name__ == "__main__":
     # Get one frame from your synchronized video
     # You run this separately for EVERY camera in your setup
     
-    calibrate_extrinsics_pnp("Screenshot 2026-02-09 at 1.00.58 PM.png", "test.json", "extrinsic_realsense.json", mat_size_meters=1.0)
+    # calibrate_extrinsics_pnp("Screenshot 2026-02-09 at 1.00.58 PM.png", "test.json", "extrinsic_realsense.json", mat_size_meters=1.0)
     # calibrate_extrinsics_pnp("gopro1_frame_001.jpg", "intrinsic_gopro1.json", "extrinsic_gopro1.json", mat_size_meters=8.0)
     pass
