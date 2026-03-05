@@ -9,14 +9,19 @@ from scipy.ndimage import gaussian_filter
 # 1. CONFIGURATION
 # ==========================================
 CSV_PATH = "2022_round_2_aga_kagawa_fighter_1.csv"
-IMAGE_PATH = "labeled.png"
+# The colored image used ONLY for mapping data
+LABELED_IMAGE_PATH = "labeled_cleanest.png" 
+# The plain white/black outline image used ONLY for the final background
+ORIGINAL_IMAGE_PATH = "empty.png" # <-- UPDATE THIS TO YOUR BLANK IMAGE NAME
 
-# --- INCREASED TOLERANCE ---
-# Bumped up to 40 to catch the entire color gradient inside the shapes
-TOLERANCE = 60  
+TOLERANCE = 40  
 
-if not os.path.exists(IMAGE_PATH):
-    print(f"Error: {IMAGE_PATH} not found.")
+# Check if files exist
+if not os.path.exists(LABELED_IMAGE_PATH):
+    print(f"Error: {LABELED_IMAGE_PATH} not found.")
+    exit()
+if not os.path.exists(ORIGINAL_IMAGE_PATH):
+    print(f"Error: {ORIGINAL_IMAGE_PATH} not found.")
     exit()
 
 # Load the CSV data using pandas
@@ -25,12 +30,16 @@ df = pd.read_csv(CSV_PATH)
 # df.sum() arguments: (numeric_only)
 sums = df.sum(numeric_only=True)
 
-# Load the image and convert it
+# Load the LABELED image for math
 # cv2.imread() arguments: (filename)
-img = cv2.imread(IMAGE_PATH)
+img_labeled = cv2.imread(LABELED_IMAGE_PATH)
 # cv2.cvtColor() arguments: (src, code)
-img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-h, w, _ = img_rgb.shape
+img_labeled_rgb = cv2.cvtColor(img_labeled, cv2.COLOR_BGR2RGB)
+h, w, _ = img_labeled_rgb.shape
+
+# Load the ORIGINAL blank image for the final background
+img_original = cv2.imread(ORIGINAL_IMAGE_PATH)
+img_original_gray = cv2.cvtColor(img_original, cv2.COLOR_BGR2GRAY)
 
 # ==========================================
 # 2. COLOR MAPPING (RGB)
@@ -51,51 +60,63 @@ color_to_data = {
 }
 
 # ==========================================
-# 3. MASKING & COOKIE-CUTTER GLOW (High Tolerance)
+# 3. MASKING & DISTANCE-TRANSFORM GLOW
 # ==========================================
 # np.zeros() arguments: (shape, dtype)
 master_heat = np.zeros((h, w), dtype=np.float32)
 
+# --- NEW: Create a kernel for morphological closing ---
+# cv2.getStructuringElement() arguments: (shape, ksize)
+kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+
 for target_rgb, value in color_to_data.items():
     if value <= 0: continue
     
-    # Calculate bounds with the increased tolerance
+    # Calculate bounds with the tolerance
     # np.clip() arguments: (a, a_min, a_max) ensures values stay between 0 and 255
     lower = np.clip(np.array(target_rgb) - TOLERANCE, 0, 255)
     upper = np.clip(np.array(target_rgb) + TOLERANCE, 0, 255)
     
-    # Create the mask for pixels falling within this wider range
+    # Create the mask using the LABELED image
     # cv2.inRange() arguments: (src, lowerb, upperb)
-    mask = cv2.inRange(img_rgb, lower, upper)
+    mask = cv2.inRange(img_labeled_rgb, lower, upper)
+    
+    # --- NEW: Apply morphological closing to fill in "salt and pepper" holes ---
+    # cv2.morphologyEx() arguments: (src, op, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     
     if np.any(mask):
-        # Find the center point of this specific body part using image moments
-        # cv2.moments() arguments: (array)
-        M = cv2.moments(mask)
-        if M["m00"] != 0:
-            cX = int(M["m10"] / M["m00"])
-            cY = int(M["m01"] / M["m00"])
-            
-            # Create a blank canvas just for this limb
-            part_canvas = np.zeros((h, w), dtype=np.float32)
-            
-            # Place the heat value exactly at the center point
-            part_canvas[cY, cX] = value
-            
-            # Apply Gaussian blur to create the radiating glow
-            # gaussian_filter() arguments: (input, sigma)
-            blurred_part = gaussian_filter(part_canvas, sigma=70)
-            
-            # Scale the blurred heat back up so it stays visible after diffusing
-            if blurred_part.max() > 0:
-                blurred_part = (blurred_part / blurred_part.max()) * value
-            
-            # THE COOKIE CUTTER: Only keep the glow that falls INSIDE the wide mask
-            # np.where() arguments: (condition, x, y)
-            cookie_cut_heat = np.where(mask > 0, blurred_part, 0)
-            
-            # Add this perfectly cut limb to the master heatmap layer
-            master_heat += cookie_cut_heat
+        # Calculate distance from every pixel to the nearest edge
+        # cv2.distanceTransform() arguments: (src, distanceType, maskSize)
+        dist_transform = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+        
+        # Find the pixel with the maximum distance (the deepest/thickest part of the shape)
+        # cv2.minMaxLoc() arguments: (src)
+        _, max_val, _, max_loc = cv2.minMaxLoc(dist_transform)
+        
+        # max_loc gives us the exact (X, Y) coordinate for our new center
+        cX, cY = max_loc
+        
+        # Create a blank canvas just for this limb
+        part_canvas = np.zeros((h, w), dtype=np.float32)
+        
+        # Place the heat value exactly at the new thickest center point
+        part_canvas[cY, cX] = value
+        
+        # Apply Gaussian blur to create the radiating glow
+        # gaussian_filter() arguments: (input, sigma)
+        blurred_part = gaussian_filter(part_canvas, sigma=70)
+        
+        # Scale the blurred heat back up so it stays visible after diffusing
+        if blurred_part.max() > 0:
+            blurred_part = (blurred_part / blurred_part.max()) * value
+        
+        # THE COOKIE CUTTER: Only keep the glow that falls INSIDE the fixed, closed mask
+        # np.where() arguments: (condition, x, y)
+        cookie_cut_heat = np.where(mask > 0, blurred_part, 0)
+        
+        # Add this perfectly cut limb to the master heatmap layer
+        master_heat += cookie_cut_heat
 
 # ==========================================
 # 4. PLOTTING
@@ -114,16 +135,12 @@ colored_heat = cmap(master_heat_norm)
 # np.where() arguments: (condition, x, y)
 colored_heat[..., 3] = np.where(master_heat > 0, 0.85, 0)
 
-# Convert original image to grayscale so the colors pop
-# cv2.cvtColor() arguments: (src, code)
-img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
-
 # plt.subplots() arguments: (figsize)
 fig, ax = plt.subplots(figsize=(10, 12))
 
-# Plot the grayscale background first
+# Plot the ORIGINAL blank background first
 # ax.imshow() arguments: (X, cmap)
-ax.imshow(img_gray, cmap='gray')
+ax.imshow(img_original_gray, cmap='gray')
 
 # Overlay the data-driven heatmap
 ax.imshow(colored_heat)
@@ -131,5 +148,4 @@ ax.axis('off')
 
 # plt.savefig() arguments: (fname, bbox_inches, dpi)
 plt.savefig("judo_heatmap_result.png", bbox_inches='tight', dpi=300)
-print("Saved high-tolerance cookie-cutter result to 'judo_heatmap_result.png'")
-plt.show()
+print("Saved dual-image result with morphological closing to 'judo_heatmap_result.png'")
