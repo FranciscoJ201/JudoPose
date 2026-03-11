@@ -6,7 +6,7 @@ import time
 # --- CONFIGURATION ---
 OUTPUT_FILENAME = 'realsense_color_only.mp4'
 W, H = 848, 480 
-TARGET_FPS = 90
+TARGET_FPS = 59.9400000
 
 # --- VIDEO WRITER CONFIG ---
 fourcc = cv2.VideoWriter_fourcc(*'mp4v') 

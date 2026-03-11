@@ -12,7 +12,7 @@ if __name__ == "__main__":
     intrOUT2 = "intrinsic2.json"
 
     split_video_for_calibration(vid1,folder1,frame_skip=1)
-    split_video_for_calibration(vid2,folder2,frame_skip=5)
+    # split_video_for_calibration(vid2,folder2,frame_skip=5)
 
     
     # RealSense standard calibration
