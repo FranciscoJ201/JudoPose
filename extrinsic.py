@@ -19,10 +19,10 @@ import glob
 #  A 1% printer scale error = ~4mm error at the top of the board.
 # ─────────────────────────────────────────────
 
-SQUARE_SIZE   = 0.080          # 80mm squares in metres
+SQUARE_SIZE   = 0.040          # 80mm squares in metres (change 4 to 8 when update and then the 3 to a 6)
 SQUARES_X     = 5              # columns
 SQUARES_Y     = 7              # rows
-MARKER_SIZE   = 0.060          # ArUco marker inside each square
+MARKER_SIZE   = 0.030          # ArUco marker inside each square
 ARUCO_DICT    = aruco.DICT_4X4_50
 
 # Reprojection error threshold — refuse to save if mean pixel error exceeds this.
