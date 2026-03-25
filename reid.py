@@ -20,7 +20,7 @@ REVERIFY_INTERVAL = 30
 # Minimum HSV histogram correlation to trust a color match as a tiebreaker.
 COLOR_MATCH_THRESHOLD = 0.6
 
-# YOLOv8 keypoint indices for torso estimation
+# YOLO26 keypoint indices for torso estimation
 KP_LEFT_SHOULDER  = 5
 KP_RIGHT_SHOULDER = 6
 KP_LEFT_HIP       = 11

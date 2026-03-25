@@ -3,6 +3,7 @@ from intrinsic import calibrate_camera_charuco
 from extrinsic import calibrate_extrinsics_combined   # ← updated function name
 from triangulate import process_kinematics
 from reid import harmonize_person_ids
+from align_jsons import synchronize_and_clean_jsons
 import numpy as np
 import json
 import os
@@ -213,6 +214,32 @@ if __name__ == "__main__":
               f"{json.load(open(cfg['extrinsic_out']))['reprojection_error_px']:.3f}px")
 
 
+# ─────────────────────────────────────────────────────────────────────────
+    # STEP 5.5 — TIMELINE SYNCHRONIZATION & FRAME DROPPING (Stage 4b)
+    # Re-aligns the hardware timelines using linear regression and deletes
+    # the USB blackout frames from all cameras.
+    # ─────────────────────────────────────────────────────────────────────────
+    print("\n--- STEP 5.5: Timeline Synchronization ---")
+    
+    csv_paths = {
+        'realsense': 'realsense_cam_1/timestamps.csv', # Update paths accordingly
+        'gopro_a': 'realsense_cam_0/timestamps.csv'    # Update paths accordingly
+    }
+    
+    raw_yolo_paths = {
+        cam_name: cfg['yolo_json']
+        for cam_name, cfg in CAMERAS.items()
+    }
+    
+    # This outputs new paths to the cleaned JSONs
+    synced_json_paths = synchronize_and_clean_jsons(
+        master_cam='realsense', # Designate your flawless camera here
+        camera_csv_paths=csv_paths,
+        camera_json_paths=raw_yolo_paths,
+        output_dir='synced_yolo_output',
+        threshold_ms=12.0
+    )
+
     # ─────────────────────────────────────────────────────────────────────────
     # STEP 6 — RE-ID: HARMONIZE PERSON IDs ACROSS CAMERAS
     # Ensures detections[0] = Athlete A and detections[1] = Athlete B
@@ -232,7 +259,7 @@ if __name__ == "__main__":
     }
 
     harmonized_paths = harmonize_person_ids(
-        camera_json_paths  = raw_yolo_jsons,
+        camera_json_paths  = synced_json_paths,
         calibration_dict   = master_calibration,
         output_dir         = 'harmonized_output',
         video_paths        = video_paths,

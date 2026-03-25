@@ -469,9 +469,19 @@ def calibrate_extrinsics_combined(
     with open(intrinsic_json, 'r') as f:
         intr = json.load(f)
 
-    K            = np.array(intr['camera_matrix'],           dtype=np.float64)
-    D            = np.array(intr['distortion_coefficients'], dtype=np.float64)
-    camera_model = intr.get('camera_model', 'standard')
+    # Handle both ChArUco format (GoPro) and Hardware format (RealSense)
+    if 'camera_matrix' in intr:
+        K = np.array(intr['camera_matrix'], dtype=np.float64)
+        D = np.array(intr['distortion_coefficients'], dtype=np.float64)
+        camera_model = intr.get('camera_model', 'standard')
+    else:
+        fx = intr['fx']; fy = intr['fy']
+        cx = intr['cx']; cy = intr['cy']
+        K = np.array([[fx, 0, cx],
+                      [0, fy, cy],
+                      [0,  0,  1]], dtype=np.float64)
+        D = np.array(intr['distortion_coeffs'], dtype=np.float64)
+        camera_model = 'standard'
 
     # ── Load and undistort the anchor frame ─────────────────────────────────
     anchor_img = cv2.imread(anchor_image_path)
