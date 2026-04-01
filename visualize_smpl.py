@@ -1,13 +1,13 @@
 import numpy as np
 import torch
 import smplx
-import open3d as o3d
+import trimesh
 import time
 
 def visualize_kinematics(npz_path, smpl_model_path, fps=30):
     """
     Reads SMPL kinematics from an .npz file and renders a real-time 3D 
-    animation of the human mesh using Open3D.
+    animation of the human mesh using Trimesh.
 
     Arguments:
     - npz_path:        (str) Path to the saved kinematics .npz file.
@@ -16,14 +16,13 @@ def visualize_kinematics(npz_path, smpl_model_path, fps=30):
     """
     print(f"[Visualizer] Loading kinematics from {npz_path}...")
     data = np.load(npz_path)
-    poses = data['poses']   # Shape: (num_frames, 72)
-    shapes = data['shapes'] # Shape: (num_frames, 10)
-    trans = data['trans']   # Shape: (num_frames, 3)
+    poses = data['poses']   
+    shapes = data['shapes'] 
+    trans = data['trans']   
 
     num_frames = poses.shape[0]
 
     print("[Visualizer] Booting SMPL model (CPU mode for rendering)...")
-    # For visualization, CPU is perfectly fast enough and avoids VRAM overhead
     smpl = smplx.create(
         model_path=smpl_model_path, 
         model_type='smpl',
@@ -32,45 +31,62 @@ def visualize_kinematics(npz_path, smpl_model_path, fps=30):
     )
 
     # ─────────────────────────────────────────────────────────────────────────
-    # INITIALIZE OPEN3D WINDOW & MESH
+    # INITIALIZE TRIMESH SCENE & BASE MESH
     # ─────────────────────────────────────────────────────────────────────────
     print("[Visualizer] Initializing 3D Render Window...")
-    vis = o3d.visualization.Visualizer()
-    vis.create_window(window_name="Judo Biomechanics - SMPL Playback", width=1280, height=720)
-
-    # Create an empty triangle mesh object
-    mesh = o3d.geometry.TriangleMesh()
     
-    # The faces (triangles) never change across frames, so we set them once
-    mesh.triangles = o3d.utility.Vector3iVector(smpl.faces)
+    # Generate the frame 0 mesh to establish the geometry
+    with torch.no_grad():
+        init_out = smpl(
+            global_orient=torch.tensor(poses[0:1, :3], dtype=torch.float32),
+            body_pose=torch.tensor(poses[0:1, 3:], dtype=torch.float32),
+            betas=torch.tensor(shapes[0:1, :], dtype=torch.float32),
+            transl=torch.tensor(trans[0:1, :], dtype=torch.float32)
+        )
     
-    # Paint the mesh a solid color (e.g., a neutral grey/blue)
-    mesh.paint_uniform_color([0.6, 0.7, 0.8])
-    mesh.compute_vertex_normals()
+    # Create the Trimesh object
+    mesh = trimesh.Trimesh(
+        vertices=init_out.vertices[0].numpy(), 
+        faces=smpl.faces,
+        process=False # Prevent Trimesh from altering our exact SMPL vertex order
+    )
+    
+    # Set a neutral visual color (RGBA format)
+    mesh.visual.vertex_colors = [150, 175, 200, 255]
 
-    # Add the mesh to the visualizer
-    vis.add_geometry(mesh)
-
-    # Optional: Add a coordinate frame to represent the global Judo mat origin
-    coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0, origin=[0, 0, 0])
-    vis.add_geometry(coord_frame)
+    # Create the scene and add our mesh
+    scene = trimesh.Scene([mesh])
 
     # ─────────────────────────────────────────────────────────────────────────
-    # THE PLAYBACK LOOP
+    # THE PLAYBACK CALLBACK LOOP
     # ─────────────────────────────────────────────────────────────────────────
-    print(f"[Visualizer] Playing {num_frames} frames at {fps} FPS. Close the window to exit.")
-    
-    sleep_time = 1.0 / fps
+    # We use a dictionary to maintain state inside the callback function
+    playback_state = {
+        'frame': 0,
+        'last_update_time': time.time(),
+        'frame_duration': 1.0 / fps
+    }
 
-    for i in range(num_frames):
-        # Slice out the current frame's parameters and convert to tensors
-        # SMPL requires shape (1, N) for forward passes
-        global_orient = torch.tensor(poses[i:i+1, :3], dtype=torch.float32)
-        body_pose = torch.tensor(poses[i:i+1, 3:], dtype=torch.float32)
-        betas = torch.tensor(shapes[i:i+1, :], dtype=torch.float32)
-        transl = torch.tensor(trans[i:i+1, :], dtype=torch.float32)
+    def update_scene(scene_obj):
+        """
+        Callback function executed continuously by the Trimesh viewer.
+        Updates the mesh vertices to the next frame in the timeline.
+        """
+        current_time = time.time()
+        
+        # Rate-limit the playback to match the target FPS
+        if (current_time - playback_state['last_update_time']) < playback_state['frame_duration']:
+            return
+            
+        frame_idx = playback_state['frame']
+        
+        # Extract current frame parameters
+        global_orient = torch.tensor(poses[frame_idx:frame_idx+1, :3], dtype=torch.float32)
+        body_pose = torch.tensor(poses[frame_idx:frame_idx+1, 3:], dtype=torch.float32)
+        betas = torch.tensor(shapes[frame_idx:frame_idx+1, :], dtype=torch.float32)
+        transl = torch.tensor(trans[frame_idx:frame_idx+1, :], dtype=torch.float32)
 
-        # Generate the 3D mesh for this specific frame
+        # Generate the new vertices for this frame
         with torch.no_grad():
             output = smpl(
                 global_orient=global_orient,
@@ -79,28 +95,18 @@ def visualize_kinematics(npz_path, smpl_model_path, fps=30):
                 transl=transl
             )
         
-        # Extract the 6890 vertices and convert them back to a standard numpy array
-        vertices = output.vertices[0].numpy()
-
-        # Update the Open3D mesh object with the new vertex positions
-        mesh.vertices = o3d.utility.Vector3dVector(vertices)
-        mesh.compute_vertex_normals() # Recompute lighting shadows
-
-        # Refresh the window
-        vis.update_geometry(mesh)
+        # Update the geometry in place
+        mesh.vertices = output.vertices[0].numpy()
         
-        # Allow the window to catch events (mouse rotations, closing)
-        if not vis.poll_events():
-            print("[Visualizer] Window closed by user.")
-            break
-            
-        vis.update_renderer()
+        # Advance the frame counter, loop back to 0 if at the end
+        playback_state['frame'] = (frame_idx + 1) % num_frames
+        playback_state['last_update_time'] = current_time
 
-        # Pause to maintain accurate FPS playback speed
-        time.sleep(sleep_time)
-
+    print(f"[Visualizer] Playing {num_frames} frames at {fps} FPS. Close the window to exit.")
+    
+    # Launch the interactive window with the callback attached
+    scene.show(callback=update_scene, smooth=False)
     print("[Visualizer] Playback complete.")
-    vis.destroy_window()
 
 if __name__ == "__main__":
     pass
