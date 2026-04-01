@@ -1,107 +1,90 @@
+import json
+from ultralytics import YOLO
 import numpy as np
-import cv2
-from ultralytics import YOLO 
 import os
-import json 
-import torch
-import time
 
-def extract_kinematics_from_video(video_path, output_json_path, engine_path='yolo11x-pose.engine'):
+def poseestimateGPU(source, engine_path='yolo11x-pose.engine'):
     """
-    Offline YOLO Pose Extraction.
-    Reads a pre-recorded .mp4 video, runs YOLO+BoTSORT tracking, and exports 
-    the 2D pixel coordinates in the exact JSON format required by the 3D pipeline.
+    Offline YOLO Pose Extraction with Live Display.
+    Reads a pre-recorded .mp4, runs YOLO+BoTSORT, shows the live tracking,
+    and exports the exact JSON format required by the 3D pipeline.
     """
-    
-    # --- MODEL LOADING (From Boilerplate) ---
+    # 1. OPTIMIZED MODEL LOADING (From your boilerplate)
     if not os.path.exists(engine_path):
-        if not torch.cuda.is_available():
-            print('[YOLO] Swapping to CPU, NO GPU detected')
-            model = YOLO('yolo11n-pose.pt')
-        else:
-            print(f"[YOLO] Exporting engine...")
-            model = YOLO('yolo11x-pose.pt')
-            model.export(format='engine', half=True)
-            model = YOLO(engine_path)
+        print(f"Exporting optimized GPU engine: {engine_path}...")
+        model = YOLO('yolo11x-pose.pt')
+        model.export(format='engine', half=True, device=0) 
+        model = YOLO(engine_path)
     else:
-        print(f"[YOLO] Loading TensorRT engine: {engine_path}")
+        print(f"Loading TensorRT engine: {engine_path}")
         model = YOLO(engine_path)
 
-    # --- VIDEO SETUP ---
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"[YOLO] Error: Could not open video {video_path}")
-        return
-
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    print(f"[YOLO] Processing {total_frames} frames at {fps} FPS...")
-
+    base_name = os.path.basename(source)
+    video_name, _ = os.path.splitext(base_name)
+    
     all_pose_data_for_json = []
-    frame_index = 0
-    start_time = time.perf_counter()
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break  # End of video
+    print("GPU Processing started (BoTSORT Tracking + Live Display)...")
+    
+    # 2. RUN INFERENCE 
+    # stream=True processes efficiently, show=True displays the video window.
+    results_generator = model.track(
+        source=source,
+        tracker='botsort.yaml',
+        conf=0.3,
+        device=0,      # RTX GPU
+        half=True,     # FP16 precision
+        stream=True,   
+        show=True      
+    )
 
-        # 1. YOLO Inference with BoTSORT tracking
-        # We use persist=True to keep track IDs consistent across frames
-        results = model.track(source=frame, tracker='botsort.yaml', persist=True, verbose=False)
-        frame_detections = [] 
+    for i, result in enumerate(results_generator):
+        frame_detections = []
 
-        # 2. Parse Detections if anyone is on screen
-        if results and len(results[0].boxes) > 0:
-            result = results[0]
-            boxes = result.boxes
-            
-            # Keypoints tensor shape: (num_people, 17, 3)
+        # 3. PARSE DETECTIONS (Only if people are found)
+        if result.boxes is not None and len(result.boxes) > 0 and result.keypoints is not None:
             keypoints_tensor = result.keypoints.data.cpu().numpy()
+            track_ids = result.boxes.id
+            
+            # Format track IDs safely (BoTSORT sometimes drops them temporarily)
+            if track_ids is None:
+                track_ids = [-1] * len(keypoints_tensor)
+            else:
+                track_ids = track_ids.cpu().numpy().astype(int).tolist()
 
-            for i in range(len(boxes)):
-                # Safely grab track ID (BoTSORT might drop it occasionally)
-                track_id = int(boxes.id[i].item()) if boxes.id is not None else -1
+            for j, keypoint_array in enumerate(keypoints_tensor):
+                track_id = track_ids[j] if j < len(track_ids) else -1
                 
+                # Extract and format strictly to [u, v, conf]
                 person_2d_keypoints = []
-                for kp in keypoints_tensor[i]:
+                for kp in keypoint_array:
                     u, v, conf = float(kp[0]), float(kp[1]), float(kp[2])
                     person_2d_keypoints.append([u, v, conf])
-
-                # Match the exact dictionary structure the pipeline expects
+                    
                 frame_detections.append({
                     "track_id": track_id,
                     "keypoints_2d": person_2d_keypoints
                 })
 
-        # 3. Append to Master List (EVEN IF EMPTY) to preserve timeline sync
+        # 4. CRITICAL: Append EVERY frame to preserve timeline sync
         all_pose_data_for_json.append({
-            "frame_index": frame_index,
-            "orig_hardware_index": frame_index, # Critical for align_jsons.py
-            "detections": frame_detections 
+            "frame_index": i,
+            "orig_hardware_index": i,
+            "detections": frame_detections
         })
         
-        # Simple progress logger
-        if frame_index % 300 == 0 and frame_index > 0:
-            print(f"  Processed {frame_index}/{total_frames} frames...")
+        if i % 300 == 0 and i > 0:
+            print(f"  Processed {i} frames...")
 
-        frame_index += 1
-
-    cap.release()
-    
-    # --- SAVE TO DISK ---
-    with open(output_json_path, 'w') as f:
-        json.dump(all_pose_data_for_json, f, indent=4)
-        
-    elapsed = time.perf_counter() - start_time
-    print(f"[YOLO] Done! Extracted {frame_index} frames in {elapsed:.1f} seconds.")
-    print(f"[YOLO] Saved to {output_json_path}")
-
+    # 5. SAVE OUTPUT
+    output_file = f'{video_name}_pipeline_pose.json'
+    with open(output_file, 'w') as f:
+        json.dump(all_pose_data_for_json, f, indent=4) 
+            
+    print(f"\nGPU Finish: Extracted {len(all_pose_data_for_json)} total frames to {output_file}")
+    return output_file
 
 if __name__ == "__main__":
     # Example execution:
-    # extract_kinematics_from_video(
-    #     video_path="realsense_cam_0/skeleton_tracking_output.mp4", 
-    #     output_json_path="realsense_cam_0/yolo_output.json"
-    # )
+    # poseestimateGPU(source="realsense_cam_0/skeleton_tracking_output.mp4")
     pass
