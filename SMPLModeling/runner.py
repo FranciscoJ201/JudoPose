@@ -32,10 +32,6 @@ START_FRAME = 0        # first frame to process
 END_FRAME   = None     # last frame to process (None = all frames)
 DEVICE      = None     # None = auto-detect CUDA, or "cpu" / "cuda"
 NO_RENDER   = False    # set True to skip the interactive viewer
-    p.add_argument("--device",      default=None,   help="'cpu' or 'cuda'")
-    p.add_argument("--no-render",   action="store_true")
-    p.add_argument("--gender",      default="neutral", choices=["neutral","male","female"])
-    return p.parse_args()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
