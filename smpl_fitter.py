@@ -1,3 +1,24 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  MONKEY PATCH — must be first, before any other imports
+#  Fixes chumpy (SMPL dependency) on Python 3.11+ / NumPy 2.0+
+# ─────────────────────────────────────────────────────────────────────────────
+import inspect
+import numpy as np
+
+if not hasattr(inspect, 'getargspec'):
+    inspect.getargspec = inspect.getfullargspec
+
+if not hasattr(np, 'int'):
+    np.int     = np.int32
+    np.bool    = getattr(np, 'bool_',   bool)
+    np.float   = np.float64
+    np.complex = np.complex128
+    np.object  = getattr(np, 'object_', object)
+    np.str     = np.str_
+    np.unicode = np.str_
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 """
 smpl_fitter.py
 ==============
@@ -85,7 +106,7 @@ TEMPORAL_WEIGHT = 0.1
 SMPLFrame = namedtuple("SMPLFrame", [
     "frame_index",
     "global_orient",   # (1, 3)   axis-angle
-    "body_pose",       # (1, 63)  axis-angle  (23 joints × 3)
+    "body_pose",       # (1, 69)  axis-angle  (23 joints × 3)
     "betas",           # (1, 10)  shape coefficients
     "transl",          # (1, 3)   root translation (metres)
     "vertices",        # (V, 3)   mesh vertices for rendering
@@ -202,7 +223,7 @@ class SMPLFitter:
 
         self.betas   = nn.Parameter(torch.zeros(1, 10, device=self.device))
         orient_init  = nn.Parameter(torch.zeros(1,  3, device=self.device))
-        pose_init    = nn.Parameter(torch.zeros(1, 63, device=self.device))
+        pose_init    = nn.Parameter(torch.zeros(1, 69, device=self.device))
         transl_init  = nn.Parameter(torch.zeros(1,  3, device=self.device))
 
         optimizer = torch.optim.Adam(
@@ -245,7 +266,7 @@ class SMPLFitter:
         orient_init = prev_orient.clone().detach() if prev_orient is not None \
                       else torch.zeros(1, 3, device=self.device)
         pose_init   = prev_pose.clone().detach()   if prev_pose   is not None \
-                      else torch.zeros(1, 63, device=self.device)
+                      else torch.zeros(1, 69, device=self.device)
 
         root_np    = self._root_from_kps(frame_data["kps_3d"])
         transl_t   = nn.Parameter(torch.tensor(root_np[None], device=self.device))

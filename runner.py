@@ -20,10 +20,10 @@ from animate_smpl import SMPLAnimator
 #  ✏️  CONFIG — edit these paths before running
 # ─────────────────────────────────────────────────────────────────────────────
 
-JSON_PATH   = "my_video_pose_detection.json"   # output from poseestimation.py
-DEPTH_DIR   = "realsense_cam_0/depth_frames/"  # folder of depth_XXXXXX.npy files
-INTR_PATH   = "realsense_cam_0/intrinsics.json"
-SMPL_DIR    = "smpl_models/"                   # folder containing smpl/ subdir with .pkl files
+JSON_PATH   = "C:\\Users\\vrspr\\OneDrive\\Desktop\\JudoPose\\color_pipeline_pose.json"   # output from poseestimation.py
+DEPTH_DIR   = "C:\\Users\\vrspr\\OneDrive\\Desktop\\realtest\\depth_frames"  # folder of depth_XXXXXX.npy files
+INTR_PATH   = "C:\\Users\\vrspr\\OneDrive\\Desktop\\realtest\\intrinsics.json"
+SMPL_DIR    = "Models"                   # folder containing smpl/ subdir with .pkl files
 OUTPUT_DIR  = "smpl_output/"
 
 TRACK_ID    = 1        # track_id_native to follow — set to None to list all IDs and exit

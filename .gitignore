@@ -11,3 +11,5 @@ judo_dataset
 runs
 datasets
 .env
+Models
+smpl_output
