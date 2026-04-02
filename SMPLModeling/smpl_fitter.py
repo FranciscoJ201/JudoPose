@@ -119,22 +119,24 @@ class SMPLFitter:
 
     def _build_model(self, model_dir: str, gender: str):
         """
-        Loads SMPL via smplx.  smplx expects the model files in a specific
-        directory layout:
-            model_dir/
-                smpl/
-                    SMPL_NEUTRAL.pkl
-                    SMPL_MALE.pkl
-                    SMPL_FEMALE.pkl
-        If you only have the flat .pkl files, we auto-create the subdir layout.
+        Loads SMPL via smplx.
+
+        smplx.create with model_type='smpl' internally appends 'smpl/' to the
+        path you give it, so the correct argument is the PARENT of the smpl/ folder.
+
+        Both of these work as SMPL_DIR in run_pipeline.py:
+            Models/          <- contains smpl/ subfolder
+            Models/smpl/     <- we detect and step up one level automatically
         """
-        smpl_subdir = os.path.join(model_dir, "smpl")
-        if not os.path.isdir(smpl_subdir):
-            # Try to find a .pkl directly in model_dir and symlink / point to it
-            smpl_subdir = model_dir
+        model_dir = os.path.normpath(model_dir)
+
+        # If user pointed directly at the smpl/ folder, step up one level
+        # to avoid smplx constructing the path Models/smpl/smpl/
+        if os.path.basename(model_dir).lower() == "smpl":
+            model_dir = os.path.dirname(model_dir)
 
         self.smpl = smplx.create(
-            smpl_subdir,
+            model_dir,
             model_type="smpl",
             gender=gender,
             use_pca=False,
