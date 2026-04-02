@@ -283,6 +283,11 @@ class SMPLFitter:
             # Pose regularisation (keep close to rest pose)
             reg_loss = 0.005 * (pose_p ** 2).mean()
 
+            # Spine stiffness penalty (prevents the "twisted towel" torso)
+            # SMPL spine joints in body_pose (23 joints) are at indices 2, 5, and 8.
+            pose_reshaped = pose_p.view(1, 23, 3)
+            spine_loss = 0.1 * (pose_reshaped[:, [2, 5, 8], :] ** 2).mean()
+
             # Temporal smoothness
             smooth_loss = torch.tensor(0.0, device=self.device)
             if prev_orient is not None:
@@ -290,7 +295,7 @@ class SMPLFitter:
             if prev_pose is not None:
                 smooth_loss = smooth_loss + TEMPORAL_WEIGHT * ((pose_p - prev_pose) ** 2).mean()
 
-            loss = joint_loss + reg_loss + smooth_loss
+            loss = joint_loss + reg_loss + smooth_loss + spine_loss
 
             optimizer.zero_grad()
             loss.backward()
