@@ -40,14 +40,30 @@ NO_RENDER   = False    # set True to skip the interactive viewer
 
 def load_detections(json_path: str) -> list[dict]:
     with open(json_path, "r") as f:
-        return json.load(f)
+        raw = json.load(f)
+
+    # Flatten nested format:
+    #   [ { "frame_index": 0, "detections": [ { "track_id": 1, "keypoints_2d": [...] } ] } ]
+    # into a flat list of per-person records the rest of the pipeline expects.
+    flat = []
+    for frame in raw:
+        frame_idx = frame["frame_index"]
+        for det in frame.get("detections", []):
+            flat.append({
+                "frame_index":     frame_idx,
+                "track_id_native": det["track_id"],
+                "keypoints_xyz":   det["keypoints_2d"],  # same [x, y, conf] triples
+                "bbox_xywh":       det.get("bbox_xywh", [0, 0, 0, 0]),
+                "conf":            det.get("conf", 1.0),
+            })
+    return flat
 
 
 def list_tracks(detections: list[dict]):
-    ids = sorted(set(d.get("track_id_native", d.get("person_id", -1)) for d in detections))
+    ids = sorted(set(d["track_id_native"] for d in detections))
     print("Track IDs found in JSON:")
     for tid in ids:
-        count = sum(1 for d in detections if d.get("track_id_native", d.get("person_id")) == tid)
+        count = sum(1 for d in detections if d["track_id_native"] == tid)
         print(f"  ID {tid:4d}  —  {count} detections")
 
 
@@ -55,9 +71,9 @@ def filter_detections(detections, track_id, start_frame, end_frame):
     """Return detections for *one person*, sorted by frame_index."""
     out = [
         d for d in detections
-        if d.get("track_id_native", d.get("person_id")) == track_id
-        and (end_frame is None or d["frame_index"] <= end_frame)
+        if d["track_id_native"] == track_id
         and d["frame_index"] >= start_frame
+        and (end_frame is None or d["frame_index"] <= end_frame)
     ]
     return sorted(out, key=lambda d: d["frame_index"])
 
