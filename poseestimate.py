@@ -3,7 +3,7 @@ from ultralytics import YOLO
 import numpy as np
 import os
 
-def poseestimateGPU(source, engine_path='yolo11x-pose.engine'):
+def poseestimateGPU(source, engine_path='yolo26x-pose.engine'):
     """
     Offline YOLO Pose Extraction with Live Display.
     Reads a pre-recorded .mp4, runs YOLO+BoTSORT, shows the live tracking,
@@ -12,7 +12,7 @@ def poseestimateGPU(source, engine_path='yolo11x-pose.engine'):
     # 1. OPTIMIZED MODEL LOADING (From your boilerplate)
     if not os.path.exists(engine_path):
         print(f"Exporting optimized GPU engine: {engine_path}...")
-        model = YOLO('yolo11x-pose.pt')
+        model = YOLO('yolo26x-pose.pt')
         model.export(format='engine', half=True, device=0) 
         model = YOLO(engine_path)
     else:
