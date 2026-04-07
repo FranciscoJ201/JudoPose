@@ -226,54 +226,113 @@ def pass_2_mask_generation(source, base_json, clinch_frames, sam_weights, mask_o
 #  PASS 3: BLACKOUT REFINEMENT (YOLO)
 # ─────────────────────────────────────────────
 
-def pass_3_blackout_refinement(source, engine_path, base_json, clinch_frames, mask_dir):
+def extract_best_person(yolo_result):
     """
-    Reloads YOLO to re-evaluate the specific clinch frames using the 
-    XMem masks to black out the opponent.
-    
-    Arguments:
-    - source (str): Video file.
-    - engine_path (str): TensorRT engine.
-    - base_json (list): The tracking data from Pass 1 to be updated.
-    - clinch_frames (list): The specific frames flagged for clinching.
-    - mask_dir (str): Folder containing XMem blackout masks.
-    
-    Returns:
-    - list: The final, refined JSON data.
+    Helper function to pull the highest-confidence person from a YOLO result.
+    Since we blacked out the opponent, there should only be one person left, 
+    but this protects against false positives in the background.
+    """
+    if yolo_result.boxes is None or len(yolo_result.boxes) == 0:
+        return None, None, None
+
+    # Get the index of the highest confidence detection
+    confidences = yolo_result.boxes.conf.cpu().numpy()
+    best_idx = np.argmax(confidences)
+
+    keypoints = yolo_result.keypoints.data[best_idx].cpu().numpy()
+    bbox_xywh = yolo_result.boxes.xywh[best_idx].cpu().numpy()
+    best_conf = float(confidences[best_idx])
+
+    # Convert keypoints to standard nested list format
+    person_3d_keypoints = []
+    for kp in keypoints:
+        person_3d_keypoints.append([float(kp[0]), float(kp[1]), float(kp[2])])
+
+    return person_3d_keypoints, bbox_xywh.tolist(), best_conf
+
+def pass_3_blackout_refinement(source, engine_path, base_json, clinch_frames, mask_dir, debug_dir="pass3_debug"):
+    """
+    Reloads YOLO to re-evaluate clinch frames using XMem masks to black out the opponent.
+    Includes a visualizer to output side-by-side proofs of the blackout frames.
     """
     if not clinch_frames:
         return base_json
 
-    print("\n--- PASS 3: Blackout Refinement (YOLO Reloaded) ---")
-    model = YOLO(engine_path)
+    print(f"\n--- PASS 3: Blackout Refinement ({len(clinch_frames)} frames) ---")
+    os.makedirs(debug_dir, exist_ok=True)
     
+    model = YOLO(engine_path)
     cap = cv2.VideoCapture(source)
     
     for frame_idx in clinch_frames:
-        # 1. Read the specific frame
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
         ret, frame = cap.read()
         if not ret: continue
         
-        # 2. Load the XMem masks for this frame
-        # mask_A = cv2.imread(f"{mask_dir}/mask_A_{frame_idx:06d}.png")
-        # mask_B = cv2.imread(f"{mask_dir}/mask_B_{frame_idx:06d}.png")
+        mask_a_path = f"{mask_dir}/mask_A_{frame_idx:06d}.png"
+        mask_b_path = f"{mask_dir}/mask_B_{frame_idx:06d}.png"
         
-        # 3. Refine Athlete A
-        # frame_A = apply_blackout(frame.copy(), mask_B) # Erase B
-        # results_A = model.predict(frame_A, verbose=False)
-        # Update base_json[frame_idx]['detections'] for Athlete A
+        if not os.path.exists(mask_a_path) or not os.path.exists(mask_b_path):
+            continue
+            
+        # 1. Load the masks
+        mask_a = cv2.imread(mask_a_path, cv2.IMREAD_GRAYSCALE)
+        mask_b = cv2.imread(mask_b_path, cv2.IMREAD_GRAYSCALE)
         
-        # 4. Refine Athlete B
-        # frame_B = apply_blackout(frame.copy(), mask_A) # Erase A
-        # results_B = model.predict(frame_B, verbose=False)
-        # Update base_json[frame_idx]['detections'] for Athlete B
-        pass
+        # Make sure masks match the original frame size just in case
+        mask_a = cv2.resize(mask_a, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
+        mask_b = cv2.resize(mask_b, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
         
-    cap.release()
-    clear_vram(model)
-    return base_json
+        # 2. DIP: The Inversion
+        inv_mask_b = cv2.bitwise_not(mask_b)
+        inv_mask_a = cv2.bitwise_not(mask_a)
+        
+        # 3. DIP: The Blackout
+        frame_for_a = cv2.bitwise_and(frame, frame, mask=inv_mask_b) # B is erased
+        frame_for_b = cv2.bitwise_and(frame, frame, mask=inv_mask_a) # A is erased
+        
+        # --- NEW: VISUALIZATION EXPORT ---
+        # Resize them slightly so the side-by-side image isn't 4000 pixels wide
+        vis_h, vis_w = 480, 854 
+        vis_frame_a = cv2.resize(frame_for_a.copy(), (vis_w, vis_h))
+        vis_frame_b = cv2.resize(frame_for_b.copy(), (vis_w, vis_h))
+        
+        # Draw labels on them
+        cv2.putText(vis_frame_a, "Target: Athlete A (B Blacked Out)", (20, 40), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.putText(vis_frame_b, "Target: Athlete B (A Blacked Out)", (20, 40), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        
+        # Glue them together horizontally and save
+        debug_image = cv2.hconcat([vis_frame_a, vis_frame_b])
+        cv2.imwrite(f"{debug_dir}/blackout_{frame_idx:06d}.jpg", debug_image)
+        # ---------------------------------
+        
+        # 4. Refine Athlete A
+        results_a = model.predict(frame_for_a, verbose=False, conf=0.1)[0]
+        kp_a, box_a, conf_a = extract_best_person(results_a)
+        
+        # 5. Refine Athlete B
+        results_b = model.predict(frame_for_b, verbose=False, conf=0.1)[0]
+        kp_b, box_b, conf_b = extract_best_person(results_b)
+        
+        # 6. Overwrite the JSON
+        if kp_a is not None and len(base_json[frame_idx]['detections']) > 0:
+            base_json[frame_idx]['detections'][0]['keypoints_xyz'] = kp_a
+            base_json[frame_idx]['detections'][0]['bbox_xywh'] = box_a
+            base_json[frame_idx]['detections'][0]['conf'] = conf_a
+            
+        if kp_b is not None and len(base_json[frame_idx]['detections']) > 1:
+            base_json[frame_idx]['detections'][1]['keypoints_xyz'] = kp_b
+            base_json[frame_idx]['detections'][1]['bbox_xywh'] = box_b
+            base_json[frame_idx]['detections'][1]['conf'] = conf_b
 
+    cap.release()
+    print("Flushing YOLO from VRAM...")
+    clear_vram(model)
+    print(f"Pass 3 Complete. Visual proofs saved to '{debug_dir}'. JSON Refined.")
+    
+    return base_json
 # ─────────────────────────────────────────────
 #  MASTER ORCHESTRATOR
 # ─────────────────────────────────────────────
