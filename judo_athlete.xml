@@ -1,0 +1,32 @@
+<mujoco model="judo_athlete">
+    <compiler angle="degree" coordinate="local" inertiafromgeom="true"/>
+    
+    <option timestep="0.0166" gravity="0 0 -9.81"/> <asset>
+        <material name="mat_gi" rgba="0.9 0.9 0.9 1"/> <material name="mat_belt" rgba="0.1 0.1 0.1 1"/> </asset>
+
+    <worldbody>
+        <light pos="0 0 5" dir="0 0 -1"/>
+        <geom type="plane" size="5 5 0.1" rgba="0.3 0.5 0.3 1"/> <body name="torso" pos="0 0 1.0">
+            <freejoint name="root"/>
+            
+            <geom name="torso_geom" type="capsule" fromto="0 0 0.2  0 0 -0.2" size="0.15" material="mat_gi"/>
+
+            <body name="right_thigh" pos="0 -0.15 -0.2">
+                <joint name="right_hip" type="ball" stiffness="100" damping="10"/>
+                
+                <geom name="r_thigh_geom" type="capsule" fromto="0 0 0  0 0 -0.4" size="0.06" material="mat_gi"/>
+
+                <body name="right_shin" pos="0 0 -0.4">
+                    <joint name="right_knee" type="hinge" axis="1 0 0" range="-150 0" stiffness="100" damping="10"/>
+                    
+                    <geom name="r_shin_geom" type="capsule" fromto="0 0 0  0 0 -0.4" size="0.05" material="mat_gi"/>
+                </body>
+            </body>
+        </body>
+    </worldbody>
+
+    <actuator>
+        <position name="motor_right_knee" joint="right_knee" kp="500"/>
+    </actuator>
+
+</mujoco>
