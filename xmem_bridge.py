@@ -20,73 +20,79 @@ class XMemBridge:
         self.device = device
         print(f"Loading XMem weights from {checkpoint_path}...")
         
-        # 1. Load the neural network
-        self.network = XMem({}, 'resnet50').to(self.device).eval()
+        # 1. Fully Unified configuration for XMem
+        # Renamed 'enable_long_term_usage' to 'enable_long_term_count_usage' 
+        # and added architectural constants.
+        self.config = {
+            'top_k': 30,
+            'mem_every': 5,
+            'deep_update_every': -1,
+            'enable_long_term': True,
+            'enable_long_term_count_usage': True, # FIXED: Matched exact key name
+            'max_mid_term_frames': 10,
+            'min_mid_term_frames': 5,
+            'max_long_term_nodes': 10000,
+            'max_long_term_elements': 10000,
+            'key_dim': 64,
+            'value_dim': 512,
+            'hidden_dim': 64,
+            'num_prototypes': 128,
+            'stochastic_sampling': False,          # Safety key
+            'sam_threshold': 0.1                   # Safety key
+        }
+        
+        # 2. Initialize network
+        self.network = XMem(config=self.config, model_path=None).to(self.device).eval()
         model_weights = torch.load(checkpoint_path, map_location=self.device)
         self.network.load_state_dict(model_weights)
         
-        # 2. Initialize the Memory Core
-        # XMem tracks multiple objects via a central memory bank
-        self.processor = InferenceCore(self.network, config={})
+        # 3. Initialize the Memory Core
+        self.processor = InferenceCore(self.network, config=self.config)
         self.is_initialized = False
         self.num_objects = 2 # Athlete A and Athlete B
 
     def _prepare_image(self, frame_bgr):
-        """Converts OpenCV BGR image to the normalized Tensor XMem expects."""
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        # RESIZE HERE: Work at 480p internal resolution to save massive VRAM
+        # XMem tracks better at lower resolutions for fast sports movement anyway
+        self.orig_h, self.orig_w = frame_bgr.shape[:2]
+        frame_resized = cv2.resize(frame_bgr, (854, 480)) 
+        
+        frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
         tensor = torch.from_numpy(frame_rgb).float().permute(2, 0, 1) / 255.0
         tensor = im_normalization(tensor).to(self.device)
-        return tensor.unsqueeze(0) # Add batch dimension
+        return tensor
 
     def initialize_masks(self, first_frame_bgr, mask_a, mask_b):
         """
-        Feeds the very first frame and the SAM-generated masks into XMem to establish its memory.
-        
-        Arguments:
-        - first_frame_bgr: The raw OpenCV image of the first clinch frame.
-        - mask_a: 2D numpy boolean array for Athlete A (from SAM).
-        - mask_b: 2D numpy boolean array for Athlete B (from SAM).
+        Feeds the first frame and ONLY the 2 foreground masks into XMem.
         """
+        # 1. This resizes the image to 480p internally
         image_tensor = self._prepare_image(first_frame_bgr)
         
-        # Create a single multi-class mask: 0=Background, 1=Athlete A, 2=Athlete B
-        combined_mask = np.zeros(first_frame_bgr.shape[:2], dtype=np.uint8)
-        combined_mask[mask_a == True] = 1
-        combined_mask[mask_b == True] = 2
+        # 2. RESIZE THE MASKS to match the 480p proxy (854x480)
+        # We use INTER_NEAREST because these are binary masks; we don't want fuzzy edges.
+        mask_a_resized = cv2.resize(mask_a.astype(np.uint8), (854, 480), interpolation=cv2.INTER_NEAREST)
+        mask_b_resized = cv2.resize(mask_b.astype(np.uint8), (854, 480), interpolation=cv2.INTER_NEAREST)
         
-        # Convert to one-hot tensor
-        mask_tensor = torch.from_numpy(combined_mask).long().to(self.device)
-        mask_onehot = F.one_hot(mask_tensor, num_classes=self.num_objects + 1)
-        mask_onehot = mask_onehot.permute(2, 0, 1).float().unsqueeze(0) # [B, C, H, W]
+        # 3. Stack the resized masks
+        masks = np.stack([mask_a_resized, mask_b_resized], axis=0).astype(np.float32) 
+        mask_tensor = torch.from_numpy(masks).to(self.device) 
         
-        # Feed the first frame to the processor
-        self.processor.set_all_labels(list(range(1, self.num_objects + 1)))
-        self.processor.step(image_tensor, mask_onehot[0]) 
+        # 4. Initialize the processor
+        self.processor.set_all_labels([1, 2])
+        self.processor.step(image_tensor, mask_tensor) 
         
         self.is_initialized = True
-        print("XMem Memory initialized with SAM masks.")
+        print(f"XMem Memory initialized for {self.num_objects} athletes at 480p.")
 
     def track_frame(self, frame_bgr):
-        """
-        Passes a new frame into XMem. XMem compares it to its memory bank 
-        and outputs the new locations of Athlete A and B.
-        
-        Returns:
-        - mask_a, mask_b (as 2D boolean numpy arrays)
-        """
-        if not self.is_initialized:
-            raise RuntimeError("You must call initialize_masks() before track_frame().")
-            
         image_tensor = self._prepare_image(frame_bgr)
-        
-        # Step the processor forward (no mask provided, XMem predicts it)
         prediction = self.processor.step(image_tensor) 
         
-        # prediction is shape [C, H, W], get the argmax to find the winning class per pixel
+        # Scale the prediction back up to match the original video size
+        prediction = F.interpolate(prediction.unsqueeze(0), 
+                                   size=(self.orig_h, self.orig_w), 
+                                   mode='bilinear', align_corners=False)[0]
+        
         pred_classes = torch.argmax(prediction, dim=0).cpu().numpy().astype(np.uint8)
-        
-        # Split back into individual boolean masks
-        mask_a = (pred_classes == 1)
-        mask_b = (pred_classes == 2)
-        
-        return mask_a, mask_b
+        return (pred_classes == 1), (pred_classes == 2)
