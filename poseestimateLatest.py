@@ -5,7 +5,41 @@ import cv2
 import torch
 import numpy as np
 from ultralytics import YOLO
+from xmem_bridge import XMemBridge
+from segment_anything import sam_model_registry, SamPredictor
 
+
+def load_sam_predictor(checkpoint_path, model_type="vit_h", device="cuda"):
+    """Loads the SAM model into VRAM and returns the Predictor object."""
+    print(f"Loading SAM ({model_type}) from {checkpoint_path}...")
+    sam = sam_model_registry[model_type](checkpoint=checkpoint_path)
+    sam.to(device=device)
+    return SamPredictor(sam)
+
+def generate_sam_masks(predictor, frame_bgr, box_a_xyxy, box_b_xyxy):
+    """
+    Feeds a frame and two bounding boxes to SAM, returning two precise boolean masks.
+    """
+    # SAM expects RGB images
+    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    
+    # This calculates the heavy image embeddings (only happens once per frame)
+    predictor.set_image(frame_rgb)
+    
+    # Predict Mask A
+    masks_a, _, _ = predictor.predict(
+        box=np.array(box_a_xyxy)[None, :],
+        multimask_output=False
+    )
+    
+    # Predict Mask B
+    masks_b, _, _ = predictor.predict(
+        box=np.array(box_b_xyxy)[None, :],
+        multimask_output=False
+    )
+    
+    # Return the 2D boolean arrays
+    return masks_a[0], masks_b[0]
 # ─────────────────────────────────────────────
 #  MEMORY MANAGEMENT
 # ─────────────────────────────────────────────
@@ -139,33 +173,66 @@ def pass_1_global_sweep(source, engine_path, clinch_iou_threshold):
 
 def pass_2_mask_generation(source, base_json, clinch_frames, sam_weights, mask_out_dir):
     """
-    Initializes SAM to generate starting masks, then uses XMem to track 
+    Pass 2: Initializes SAM to generate starting masks, then uses XMem to track 
     them through the clinch sequences.
-    
-    Arguments:
-    - source (str): Video file.
-    - base_json (list): The tracking data from Pass 1.
-    - clinch_frames (list): The specific frames flagged for clinching.
-    - sam_weights (str): Path to SAM checkpoint.
-    - mask_out_dir (str): Folder to save XMem blackout masks.
     """
     if not clinch_frames:
-        print("\n--- PASS 2: Mask Generation Skipped (No clinches detected) ---")
         return
 
-    print(f"\n--- PASS 2: Mask Generation ({len(clinch_frames)} clinch frames to process) ---")
+    print(f"\n--- PASS 2: Mask Generation ({len(clinch_frames)} clinch frames) ---")
     os.makedirs(mask_out_dir, exist_ok=True)
     
-    # TODO: Initialize SAM Model Here
-    # sam = load_sam(sam_weights)
+    cap = cv2.VideoCapture(source)
     
-    # TODO: Initialize XMem Model Here
-    # xmem = load_xmem()
+    # --- LOAD MODELS INTO VRAM ---
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    sam_predictor = load_sam_predictor(sam_weights, device=device)
+    xmem_tracker = XMemBridge(checkpoint_path='XMem/XMem.pth', device=device)
     
-    print("  [Placeholder] Running SAM and XMem... saving masks to disk.")
+    current_clinch_event_active = False 
     
-    # clear_vram(sam)
-    # clear_vram(xmem)
+    for frame_idx in clinch_frames:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
+        if not ret: continue
+        
+        # --- THE TRIGGER (Initialize SAM) ---
+        if not current_clinch_event_active:
+            print(f"  New clinch detected at frame {frame_idx}. Generating God-Masks with SAM...")
+            
+            # 1. Grab bounding boxes from base_json
+            boxes = [det['bbox_xywh'] for det in base_json[frame_idx]['detections']]
+            box_a_xyxy = convert_yolo_xywh_to_sam_xyxy(boxes[0])
+            box_b_xyxy = convert_yolo_xywh_to_sam_xyxy(boxes[1])
+            
+            # 2. Generate SAM masks
+            mask_a, mask_b = generate_sam_masks(sam_predictor, frame, box_a_xyxy, box_b_xyxy)
+            
+            # 3. Feed the "God-Masks" to XMem's memory bank
+            xmem_tracker.initialize_masks(frame, mask_a, mask_b)
+            current_clinch_event_active = True
+        
+        # --- THE TRACKER (XMem takes over) ---
+        out_mask_a, out_mask_b = xmem_tracker.track_frame(frame)
+        
+        # Save the masks to disk as PNGs (Convert boolean True/False to 255/0 grayscale)
+        cv2.imwrite(f"{mask_out_dir}/mask_A_{frame_idx:06d}.png", out_mask_a.astype(np.uint8) * 255)
+        cv2.imwrite(f"{mask_out_dir}/mask_B_{frame_idx:06d}.png", out_mask_b.astype(np.uint8) * 255)
+        
+        # --- THE RELEASE ---
+        # If the next frame is NOT in the clinch_frames list, the clinch is over.
+        if (frame_idx + 1) not in clinch_frames:
+            current_clinch_event_active = False
+            # Clear XMem's internal memory bank for the next separate clinch
+            xmem_tracker.processor.clear_memory() 
+
+    cap.release()
+    
+    # --- FLUSH VRAM ---
+    print("Flushing SAM and XMem from VRAM...")
+    clear_vram(sam_predictor.model) # Target the internal SAM model for deletion
+    clear_vram(xmem_tracker.network)
+    print("Pass 2 Complete. Masks saved to disk.")
 
 # ─────────────────────────────────────────────
 #  PASS 3: BLACKOUT REFINEMENT (YOLO)
@@ -248,5 +315,16 @@ def poseestimate_multipass(source, engine_path='yolo11x-pose.engine',
 
 
 if __name__ == "__main__":
-    # poseestimate_multipass(source="realsense_cam_0/skeleton_tracking_output.mp4")
-    pass
+    print("--- STARTING PIPELINE TEST ---")
+    
+    test_video = "test_clinch.mp4" # Your short test clip
+    
+    # Run the multi-pass pipeline
+    output_file = poseestimate_multipass(
+        source=test_video,
+        engine_path="yolo11x-pose.engine",       # Your YOLO weights
+        sam_checkpoint="sam_vit_h_4b8939.pth",   # Your SAM weights
+        clinch_iou_threshold=0.3                 # XMem trigger threshold
+    )
+    
+    print("--- TEST COMPLETE ---")
