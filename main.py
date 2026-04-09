@@ -1,4 +1,4 @@
-from video_split import split_video_for_calibration
+from basic_video_split import split_video_for_calibration
 from intrinsic import calibrate_camera_charuco
 from extrinsic import calibrate_extrinsics_combined   # ← updated function name
 from triangulate import process_kinematics
