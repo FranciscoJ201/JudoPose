@@ -14,3 +14,5 @@ datasets
 Models
 smpl_output
 XMem
+smpl_meshes_output
+**/*.xml
