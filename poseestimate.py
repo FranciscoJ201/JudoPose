@@ -35,7 +35,8 @@ def poseestimateGPU(source, engine_path='yolo26x-pose.engine'):
         device=0,      # RTX GPU
         half=True,     # FP16 precision
         stream=True,   
-        show=True      
+        show=True,
+        save = True      
     )
 
     for i, result in enumerate(results_generator):
@@ -86,5 +87,4 @@ def poseestimateGPU(source, engine_path='yolo26x-pose.engine'):
 
 if __name__ == "__main__":
     # Example execution:
-    # poseestimateGPU(source="realsense_cam_0/skeleton_tracking_output.mp4")
-    pass
+    poseestimateGPU(source="/Users/franciscojimenez/Desktop/Screenshot 2026-04-08 at 4.03.01 PM.png")

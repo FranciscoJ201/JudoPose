@@ -171,6 +171,7 @@ def pass_1_global_sweep(source, engine_path, clinch_iou_threshold):
 #  PASS 2: MASK GENERATION (SAM + XMem)
 # ─────────────────────────────────────────────
 
+@torch.inference_mode()  # <--- THIS IS THE MAGIC WAND
 def pass_2_mask_generation(source, base_json, clinch_frames, sam_weights, mask_out_dir):
     if not clinch_frames: return
 
@@ -182,7 +183,7 @@ def pass_2_mask_generation(source, base_json, clinch_frames, sam_weights, mask_o
     xmem_tracker = None
     current_clinch_event_active = False 
 
-    for frame_idx in clinch_frames:
+    for loop_count, frame_idx in enumerate(clinch_frames):
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
         ret, frame = cap.read()
         if not ret: continue
@@ -198,14 +199,16 @@ def pass_2_mask_generation(source, base_json, clinch_frames, sam_weights, mask_o
             
             mask_a, mask_b = generate_sam_masks(sam_predictor, frame, box_a_xyxy, box_b_xyxy)
             
-            # 2. KILL SAM IMMEDIATELY
-            clear_vram(sam_predictor.model)
+            # 2. KILL SAM RUTHLESSLY
+            # Explicitly target the model payload inside the predictor
+            if hasattr(sam_predictor, 'model'):
+                del sam_predictor.model 
             del sam_predictor
+            gc.collect()
+            torch.cuda.empty_cache()
             
-            # 3. LOAD XMEM NOW THAT SAM IS GONE
-            if xmem_tracker is None:
-                xmem_tracker = XMemBridge(checkpoint_path='XMem/XMem.pth', device=device)
-            
+            # 3. LOAD A FRESH XMEM
+            xmem_tracker = XMemBridge(checkpoint_path='XMem/XMem.pth', device=device)
             xmem_tracker.initialize_masks(frame, mask_a, mask_b)
             current_clinch_event_active = True
 
@@ -215,13 +218,26 @@ def pass_2_mask_generation(source, base_json, clinch_frames, sam_weights, mask_o
         cv2.imwrite(f"{mask_out_dir}/mask_A_{frame_idx:06d}.png", out_mask_a.astype(np.uint8) * 255)
         cv2.imwrite(f"{mask_out_dir}/mask_B_{frame_idx:06d}.png", out_mask_b.astype(np.uint8) * 255)
 
+        # --- THE PRESSURE VALVE ---
+        # Clear VRAM fragmentation every 30 frames during a long clinch
+        if loop_count % 30 == 0:
+            torch.cuda.empty_cache()
+
+        # --- THE RESET ---
         if (frame_idx + 1) not in clinch_frames:
             current_clinch_event_active = False
-            # Clear memory but keep the model loaded for the next clinch
-            xmem_tracker.processor.clear_memory() 
+            
+            del xmem_tracker
+            xmem_tracker = None
+            gc.collect()
+            torch.cuda.empty_cache()
 
     cap.release()
-    if xmem_tracker: clear_vram(xmem_tracker.network)
+    
+    if xmem_tracker is not None: 
+        del xmem_tracker
+        gc.collect()
+        torch.cuda.empty_cache()
 # ─────────────────────────────────────────────
 #  PASS 3: BLACKOUT REFINEMENT (YOLO)
 # ─────────────────────────────────────────────
@@ -364,7 +380,7 @@ def poseestimate_multipass(source, engine_path='yolo11x-pose.engine',
 if __name__ == "__main__":
     print("--- STARTING PIPELINE TEST ---")
     
-    test_video = "C:\\Users\\vrspr\\Downloads\\xmemtest.mp4" # Your short test clip
+    test_video = r"C:\Users\vrspr\OneDrive\Desktop\All Japan 2024\MATSUYUKI VS. HAMATA 2ND ROUND.mp4" # Your short test clip
     
     # Run the multi-pass pipeline
     output_file = poseestimate_multipass(
